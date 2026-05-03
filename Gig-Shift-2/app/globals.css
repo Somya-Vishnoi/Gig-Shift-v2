@@ -1,0 +1,146 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  /* GigShift Design Tokens */
+  --gs-green:        #059669;
+  --gs-green-light:  #10B981;
+  --gs-green-dim:    #D1FAE5;
+  --gs-black:        #0A0A0A;
+  --gs-gray-900:     #111827;
+  --gs-gray-800:     #1F2937;
+  --gs-gray-600:     #4B5563;
+  --gs-gray-400:     #9CA3AF;
+  --gs-gray-200:     #E5E7EB;
+  --gs-gray-100:     #F3F4F6;
+  --gs-gray-50:      #F9FAFB;
+  --gs-white:        #FFFFFF;
+  --gs-amber:        #F59E0B;
+  --gs-red:          #EF4444;
+
+  /* Semantic */
+  --background:      var(--gs-white);
+  --foreground:      var(--gs-black);
+  --border:          var(--gs-gray-200);
+  --muted:           var(--gs-gray-400);
+  --surface:         var(--gs-gray-50);
+  --surface-raised:  var(--gs-white);
+  --primary:         var(--gs-green);
+  --primary-fg:      var(--gs-white);
+
+  --radius: 0.625rem;
+}
+
+.dark {
+  --background:      #0C0C0C;
+  --foreground:      #F9FAFB;
+  --border:          #1F2937;
+  --muted:           #4B5563;
+  --surface:         #111827;
+  --surface-raised:  #161E2A;
+  --primary:         var(--gs-green);
+  --primary-fg:      var(--gs-white);
+}
+
+@theme inline {
+  --font-sans: 'Geist', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Geist Mono', 'Courier New', monospace;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-border: var(--border);
+  --color-primary: var(--primary);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 4px);
+  --radius-xl: calc(var(--radius) + 8px);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    box-sizing: border-box;
+  }
+
+  html {
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    line-height: 1.6;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+    font-weight: 600;
+  }
+
+  /* Clean scrollbar */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--gs-gray-200); border-radius: 2px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--gs-gray-400); }
+
+  /* Focus */
+  :focus-visible {
+    outline: 2px solid var(--gs-green);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* Inputs */
+  input, select, textarea {
+    font-family: inherit;
+  }
+
+  /* Remove number input arrows */
+  input[type=number]::-webkit-inner-spin-button,
+  input[type=number]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+  }
+}
+
+/* Typography scale */
+.gs-display   { font-size: 3rem;   font-weight: 700; letter-spacing: -0.04em; line-height: 1; }
+.gs-h1        { font-size: 2rem;   font-weight: 700; letter-spacing: -0.03em; line-height: 1.1; }
+.gs-h2        { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.02em; line-height: 1.2; }
+.gs-h3        { font-size: 1.125rem; font-weight: 600; letter-spacing: -0.01em; }
+.gs-body      { font-size: 0.9375rem; line-height: 1.6; }
+.gs-small     { font-size: 0.8125rem; line-height: 1.5; }
+.gs-label     { font-size: 0.6875rem; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; }
+.gs-mono      { font-family: var(--font-mono); font-size: 0.875rem; }
+
+/* Layout */
+.gs-container { max-width: 1080px; margin: 0 auto; padding: 0 1.5rem; }
+.gs-page      { padding: 2.5rem 1.5rem; max-width: 1080px; margin: 0 auto; }
+
+/* Divider */
+.gs-divider   { height: 1px; background: var(--border); }
+
+/* Status colors */
+.gs-status-green  { color: var(--gs-green-light); }
+.gs-status-amber  { color: var(--gs-amber); }
+.gs-status-red    { color: var(--gs-red); }
+.gs-status-gray   { color: var(--gs-gray-400); }
+
+/* Animations — subtle */
+@keyframes gs-fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes gs-pulse-dot {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
+.gs-fade-in    { animation: gs-fade-in 0.3s ease forwards; }
+.gs-pulse-dot  { animation: gs-pulse-dot 2s ease-in-out infinite; }
