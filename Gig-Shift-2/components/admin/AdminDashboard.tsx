@@ -1,359 +1,406 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import type { MarketSnapshot } from "@/lib/data/types";
-import { PLATFORMS, ZONES } from "@/lib/data/types";
-import { getRiders, getPlatforms, getOrders, type RiderRecord, type PlatformRecord, type OrderRecord } from "@/lib/supabase";
-import { generateWorkerActivity, generateLiveOrders } from "@/lib/simulation/gigslots";
-import { Users, Building2, TrendingUp, CheckCircle, Clock, AlertTriangle, RefreshCw } from "lucide-react";
+import { PLATFORMS, ZONES, PITCH_STATS } from "@/lib/data/types";
+import { CheckCircle, TrendingUp, Users, AlertTriangle } from "lucide-react";
 
 interface Props {
-  dark: boolean;
-  name: string;
   snapshots: MarketSnapshot[];
   tickCount: number;
+  dark: boolean;
+  name: string;
 }
 
-type Tab = "overview" | "riders" | "platforms" | "orders";
+type Tab = "overview" | "orders" | "dispatch" | "incentives";
 
-export default function AdminDashboard({ dark, name, tickCount }: Props) {
+const c = (dark: boolean) => ({
+  bg: dark ? "bg-[#0D0D18] border-[#1E1E2E]" : "bg-white border-[#E8E8F0]",
+  surface: dark ? "bg-[#13131F]" : "bg-[#F8F8FF]",
+  text: dark ? "text-[#E8E8F0]" : "text-[#1A1A2E]",
+  muted: dark ? "text-[#555]" : "text-[#999]",
+  border: dark ? "border-[#1E1E2E]" : "border-[#E8E8F0]",
+  divider: dark ? "divide-[#1E1E2E]" : "divide-[#F0F0F8]",
+  page: dark ? "bg-[#0A0A0F]" : "bg-[#F5F5FA]",
+});
+
+let _seed = 200;
+const RIDER_NAMES = ["Ravi K.", "Anita S.", "Suresh M.", "Priya R.", "Deepak J.", "Meena P.", "Karthik B.", "Sneha T.", "Vikram L.", "Anjali N."];
+
+function makeOrders(snapshots: MarketSnapshot[]) {
+  return snapshots.map(snap => {
+    const p = PLATFORMS.find(p => p.id === snap.platformId)!;
+    const zone = ZONES[Math.floor(Math.abs(Math.sin(_seed++ * 1.7)) * ZONES.length)];
+    const requested = 5 + Math.floor(Math.abs(Math.sin(_seed * 2.3)) * 30);
+    const confirmed = Math.min(requested, Math.round(requested * snap.fulfillmentRate * (0.7 + Math.abs(Math.sin(_seed * 3.1)) * 0.3)));
+    const elapsed = 30 + Math.floor(Math.abs(Math.sin(_seed * 4.7)) * 240);
+    const fillRate = confirmed / requested;
+    const sla: "green" | "yellow" | "red" = fillRate >= 0.85 ? "green" : fillRate >= 0.55 ? "yellow" : "red";
+    return { id: `ORD-${1000 + _seed}`, platform: p, zone, requested, confirmed, elapsed, ppd: snap.ppd, sla };
+  });
+}
+
+function makeDispatches(tick: number) {
+  return Array.from({ length: 10 }, (_, i) => {
+    const seed = tick + i;
+    const p = PLATFORMS[Math.floor(Math.abs(Math.sin(seed * 1.3)) * PLATFORMS.length)];
+    const zone = ZONES[Math.floor(Math.abs(Math.sin(seed * 2.7)) * ZONES.length)];
+    const rider = RIDER_NAMES[Math.floor(Math.abs(Math.sin(seed * 3.9)) * RIDER_NAMES.length)];
+    const nudged = Math.abs(Math.sin(seed * 5.1)) > 0.65;
+    const ppd = 35 + Math.floor(Math.abs(Math.sin(seed * 6.2)) * 25);
+    const ts = new Date(Date.now() - i * 12000);
+    return { id: `D-${seed}`, rider, platform: p, zone, ppd: nudged ? ppd + Math.round(ppd * 0.08) : ppd, nudged, ts };
+  });
+}
+
+export default function AdminDashboard({ snapshots, tickCount, dark, name }: Props) {
   const [tab, setTab] = useState<Tab>("overview");
-  const [riders, setRiders] = useState<RiderRecord[]>([]);
-  const [platforms, setPlatforms] = useState<PlatformRecord[]>([]);
-  const [dbOrders, setDbOrders] = useState<OrderRecord[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [lastRefresh, setLastRefresh] = useState(new Date());
+  const [orders, setOrders] = useState<ReturnType<typeof makeOrders>>([]);
+  const [dispatches, setDispatches] = useState<ReturnType<typeof makeDispatches>>([]);
+  const [toast, setToast] = useState<string | null>(null);
 
-  const liveOrders = generateLiveOrders(tickCount);
-  const riderActivity = generateWorkerActivity(tickCount);
+  const cls = c(dark);
 
-  async function fetchAll() {
-    setLoading(true);
-    const [r, p, o] = await Promise.all([getRiders(), getPlatforms(), getOrders()]);
-    if (r.data) setRiders(r.data);
-    if (p.data) setPlatforms(p.data);
-    if (o.data) setDbOrders(o.data);
-    setLastRefresh(new Date());
-    setLoading(false);
-  }
+  useEffect(() => {
+    if (snapshots.length) {
+      setOrders(makeOrders(snapshots));
+      setDispatches(makeDispatches(tickCount));
+    }
+  }, [snapshots, tickCount]);
 
-  useEffect(() => { fetchAll(); }, []);
+  const totalReq = orders.reduce((s, o) => s + o.requested, 0);
+  const totalConf = orders.reduce((s, o) => s + o.confirmed, 0);
+  const fillRate = totalReq > 0 ? Math.round((totalConf / totalReq) * 100) : 0;
+  const redSLAs = orders.filter(o => o.sla === "red").length;
+  const shortageSnaps = snapshots.filter(s => s.shortage > 0);
 
-  // KPIs — mix real DB counts + simulated operational data
-  const totalRiders = riders.length || riderActivity.length;
-  const totalPlatforms = platforms.length || PLATFORMS.length;
-  const activeRiders = riderActivity.filter(r => r.status !== "idle").length;
-  const totalOrdersToday = liveOrders.length + dbOrders.length;
-  const fulfilledOrders = liveOrders.filter(o => o.status === "fulfilled").length;
-  const slaRate = totalOrdersToday > 0 ? Math.round((fulfilledOrders / liveOrders.length) * 100) : 0;
-  const totalRevenue = dbOrders.reduce((s, o) => s + (o.total_cost ?? 0), 0);
-  const simRevenue = liveOrders.reduce((s, o) => s + o.totalCost, 0);
-
-  const surface = dark ? "bg-[#111827] border-gray-800" : "bg-white border-gray-200";
-  const muted = dark ? "text-gray-400" : "text-gray-500";
-  const heading = dark ? "text-gray-100" : "text-gray-900";
-  const sub = dark ? "text-gray-500" : "text-gray-400";
-  const divider = dark ? "border-gray-800" : "border-gray-100";
-  const rowHover = dark ? "hover:bg-gray-800/50" : "hover:bg-gray-50";
-
-  const TABS = [
-    { key: "overview",  label: "Overview" },
-    { key: "riders",    label: `Riders (${totalRiders})` },
-    { key: "platforms", label: `Platforms (${totalPlatforms})` },
-    { key: "orders",    label: "Live Orders" },
-  ] as const;
+  const TABS: { key: Tab; label: string }[] = [
+    { key: "overview", label: "Overview" },
+    { key: "orders", label: "Live orders" },
+    { key: "dispatch", label: "Dispatch" },
+    { key: "incentives", label: "Incentives" },
+  ];
 
   return (
-    <div className={`min-h-screen ${dark ? "bg-[#0C0C0C]" : "bg-gray-50"}`}>
-      <div className="max-w-5xl mx-auto px-6 py-8">
+    <div className={`min-h-screen ${cls.page}`}>
+      {toast && (
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-[#00C896] text-black text-[13px] font-semibold px-5 py-2.5 rounded-full shadow-lg">
+          {toast}
+        </div>
+      )}
 
-        {/* Page header */}
-        <div className="flex items-start justify-between mb-8">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
+
+        {/* Page title */}
+        <div className="flex items-start justify-between mb-6">
           <div>
-            <h1 className={`text-[24px] font-semibold tracking-tight mb-1 ${heading}`}>Admin Console</h1>
-            <p className={`text-[14px] ${muted}`}>
-              {name} · Last updated {lastRefresh.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-            </p>
+            <h1 className={`text-[22px] sm:text-[26px] font-bold tracking-tight ${cls.text}`}>Admin Console</h1>
+            <p className={`text-[13px] mt-0.5 ${cls.muted}`}>GigShift · {name} · Full system view</p>
           </div>
-          <button onClick={fetchAll} disabled={loading}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg border text-[13px] font-medium cursor-pointer transition-colors ${
-              dark ? "border-gray-700 text-gray-300 hover:bg-gray-800" : "border-gray-200 text-gray-600 hover:bg-gray-50"
-            } disabled:opacity-50`}>
-            <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
-            Refresh
-          </button>
+          <div className="text-right">
+            <div className={`text-[10px] tracking-widest uppercase mb-1 ${cls.muted}`}>Fill rate</div>
+            <div className={`text-[30px] font-extrabold ${fillRate >= 80 ? "text-[#00C896]" : fillRate >= 55 ? "text-[#F7B731]" : "text-[#FF4D1C]"}`}>
+              {fillRate}%
+            </div>
+          </div>
         </div>
 
-        {/* KPI row */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-8">
-          {[
-            { label: "Registered Riders",   value: totalRiders.toLocaleString(),  sub: `${activeRiders} active now`,        icon: Users,       color: "#059669" },
-            { label: "Partner Platforms",    value: totalPlatforms.toString(),      sub: "All zones covered",                 icon: Building2,   color: "#0891B2" },
-            { label: "SLA Fulfillment",      value: `${slaRate}%`,                 sub: `${fulfilledOrders}/${liveOrders.length} orders`,  icon: CheckCircle, color: slaRate >= 90 ? "#059669" : slaRate >= 70 ? "#F59E0B" : "#EF4444" },
-            { label: "Revenue (session)",    value: `₹${(totalRevenue + simRevenue).toLocaleString()}`, sub: "Real + simulated", icon: TrendingUp,  color: "#7C3AED" },
-          ].map(kpi => (
-            <div key={kpi.label} className={`rounded-xl border p-4 ${surface}`}>
-              <div className="flex items-center justify-between mb-3">
-                <span className={`text-[11px] font-medium tracking-wider uppercase ${sub}`}>{kpi.label}</span>
-                <kpi.icon size={14} style={{ color: kpi.color }} />
+        {/* KPI bar — pitch numbers */}
+        <div className={`rounded-2xl border overflow-hidden mb-5 ${cls.bg}`}>
+          <div className="grid grid-cols-2 sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-[#1E1E2E]">
+            {[
+              { label: "Active riders", value: PITCH_STATS.totalRiders.toLocaleString(), icon: <Users size={14} />, color: "#00C896" },
+              { label: "Dispatched this month", value: PITCH_STATS.dispatchedThisMonth, icon: <TrendingUp size={14} />, color: "#6C5CE7" },
+              { label: "SLA rate", value: PITCH_STATS.slaRate, icon: <CheckCircle size={14} />, color: "#00C896" },
+              { label: "SLA alerts", value: String(redSLAs), icon: <AlertTriangle size={14} />, color: redSLAs > 0 ? "#FF4D1C" : "#555" },
+            ].map(stat => (
+              <div key={stat.label} className={`px-5 py-4 ${dark ? "bg-[#0D0D18]" : "bg-white"}`}>
+                <div className="flex items-center gap-1.5 mb-2" style={{ color: stat.color }}>
+                  {stat.icon}
+                  <span className="text-[10px] tracking-widest uppercase font-medium">{stat.label}</span>
+                </div>
+                <div className={`text-[24px] font-bold`} style={{ color: stat.color }}>{stat.value}</div>
               </div>
-              <div className={`text-[26px] font-bold tracking-tight leading-none mb-1 ${heading}`}>{kpi.value}</div>
-              <div className={`text-[12px] ${sub}`}>{kpi.sub}</div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
 
         {/* Tabs */}
-        <div className={`flex gap-0 border-b mb-6 ${divider}`}>
+        <div className={`flex border-b mb-5 overflow-x-auto ${cls.border}`}>
           {TABS.map(t => (
             <button key={t.key} onClick={() => setTab(t.key)}
-              className={`px-4 py-2.5 text-[13px] font-medium cursor-pointer transition-colors border-b-2 -mb-px ${
-                tab === t.key ? "border-[#059669] text-[#059669]" : `border-transparent ${muted} hover:text-gray-700 dark:hover:text-gray-300`
+              className={`px-4 py-2.5 text-[13px] font-medium cursor-pointer border-b-2 -mb-px whitespace-nowrap transition-colors ${
+                tab === t.key ? "border-[#6C5CE7] text-[#9D8FFF]" : `border-transparent ${cls.muted}`
               }`}>
               {t.label}
             </button>
           ))}
         </div>
 
-        {/* Tab: Overview */}
+        {/* Overview Tab — Dispatch Zone Map */}
         {tab === "overview" && (
-          <div className="space-y-4 gs-fade-in">
-
-            {/* Live dispatch */}
-            <div className={`rounded-xl border ${surface} overflow-hidden`}>
-              <div className={`px-4 py-3 border-b ${divider} flex items-center justify-between`}>
-                <span className={`text-[11px] font-medium tracking-widest uppercase ${sub}`}>Live dispatch</span>
-                <div className="flex items-center gap-1.5">
-                  <div className="w-1.5 h-1.5 rounded-full bg-[#059669] gs-pulse-dot" />
-                  <span className={`text-[11px] ${sub}`}>Auto-updating</span>
-                </div>
+          <div className="space-y-4">
+            {/* Platform health grid */}
+            <div className={`rounded-2xl border ${cls.bg} overflow-hidden`}>
+              <div className={`px-5 py-3 border-b text-[11px] font-medium tracking-widest uppercase ${cls.muted} ${cls.border}`}>
+                Platform SLA health
               </div>
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className={`border-b ${divider}`}>
-                      {["Order ID", "Platform", "Zone", "Riders", "Fill rate", "Status"].map(h => (
-                        <th key={h} className={`text-left text-[11px] font-medium tracking-wider px-4 py-2.5 ${sub}`}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {liveOrders.map((o, i) => {
-                      const p = PLATFORMS.find(p => p.id === o.platformId)!;
-                      const pct = Math.round((o.ridersConfirmed / o.ridersRequested) * 100);
-                      const statusColor = o.status === "fulfilled" ? "text-[#059669]" : o.status === "at_risk" ? "text-red-500" : "text-amber-500";
-                      return (
-                        <tr key={o.id} className={`border-b last:border-0 ${divider} transition-colors ${rowHover}`}>
-                          <td className={`px-4 py-3 text-[12px] font-mono ${heading}`}>{o.id}</td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              <div className="w-5 h-5 rounded flex items-center justify-center text-white text-[10px] font-bold shrink-0" style={{ background: p?.color ?? "#059669" }}>
-                                {p?.name[0]}
-                              </div>
-                              <span className={`text-[13px] ${heading}`}>{p?.name}</span>
-                            </div>
-                          </td>
-                          <td className={`px-4 py-3 text-[13px] ${muted}`}>{o.zone}</td>
-                          <td className={`px-4 py-3 text-[13px] font-mono ${heading}`}>{o.ridersConfirmed}/{o.ridersRequested}</td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              <div className={`w-16 h-1 rounded-full ${dark ? "bg-gray-800" : "bg-gray-100"}`}>
-                                <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, background: pct >= 90 ? "#059669" : pct >= 60 ? "#F59E0B" : "#EF4444" }} />
-                              </div>
-                              <span className={`text-[11px] font-mono ${muted}`}>{pct}%</span>
-                            </div>
-                          </td>
-                          <td className="px-4 py-3">
-                            <span className={`text-[12px] font-medium capitalize ${statusColor}`}>
-                              {o.status === "fulfilling" ? "Filling" : o.status === "fulfilled" ? "Fulfilled" : "At risk"}
-                            </span>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+              <div className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-[#1E1E2E]">
+                {snapshots.map(snap => {
+                  const p = PLATFORMS.find(pl => pl.id === snap.platformId)!;
+                  const pct = Math.round(snap.fulfillmentRate * 100);
+                  const col = pct >= 85 ? "#00C896" : pct >= 55 ? "#F7B731" : "#FF4D1C";
+                  return (
+                    <div key={snap.platformId} className={`px-5 py-4 ${dark ? "bg-[#0D0D18]" : "bg-white"}`}>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white text-[11px] font-bold" style={{ background: p.color }}>
+                            {p.name[0]}
+                          </div>
+                          <div>
+                            <div className={`text-[13px] font-semibold ${cls.text}`}>{p.name}</div>
+                            {snap.surgeMult > 1.1 && (
+                              <div className="text-[10px] font-medium" style={{ color: p.color }}>{snap.surgeMult.toFixed(2)}× surge</div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="text-[20px] font-bold font-mono" style={{ color: col }}>{pct}%</div>
+                      </div>
+                      <div className={`h-1.5 rounded-full ${dark ? "bg-[#1E1E2E]" : "bg-gray-100"}`}>
+                        <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, background: col }} />
+                      </div>
+                      <div className={`flex justify-between text-[11px] mt-1.5 ${cls.muted}`}>
+                        <span>{snap.supply} supply · {snap.demand} demand</span>
+                        {snap.shortage > 0 && <span className="text-[#FF4D1C]">{snap.shortage} short</span>}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
-            {/* Rider activity */}
-            <div className={`rounded-xl border ${surface} overflow-hidden`}>
-              <div className={`px-4 py-3 border-b ${divider}`}>
-                <span className={`text-[11px] font-medium tracking-widest uppercase ${sub}`}>Rider activity</span>
+            {/* Zone demand grid — the WOW visual */}
+            <div className={`rounded-2xl border ${cls.bg} overflow-hidden`}>
+              <div className={`px-5 py-3 border-b text-[11px] font-medium tracking-widest uppercase ${cls.muted} ${cls.border}`}>
+                Zone demand map — Bangalore
               </div>
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className={`border-b ${divider}`}>
-                      {["Rider", "Zone", "Platform", "Status", "PPD", "Earnings today"].map(h => (
-                        <th key={h} className={`text-left text-[11px] font-medium tracking-wider px-4 py-2.5 ${sub}`}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {riderActivity.map((r, i) => {
-                      const p = PLATFORMS.find(p => p.id === r.platformId)!;
-                      const statusColor = r.status === "delivering" ? "text-[#059669]" : r.status === "idle" ? muted : "text-amber-500";
-                      return (
-                        <tr key={r.workerId} className={`border-b last:border-0 ${divider} transition-colors ${rowHover}`}>
-                          <td className={`px-4 py-3 text-[13px] font-medium ${heading}`}>{r.workerName}</td>
-                          <td className={`px-4 py-3 text-[13px] ${muted}`}>{r.zone}</td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-1.5">
-                              <div className="w-4 h-4 rounded text-white text-[9px] font-bold flex items-center justify-center shrink-0" style={{ background: p?.color ?? "#059669" }}>{p?.name[0]}</div>
-                              <span className={`text-[12px] ${muted}`}>{p?.name}</span>
-                            </div>
-                          </td>
-                          <td className={`px-4 py-3 text-[12px] font-medium capitalize ${statusColor}`}>{r.status}</td>
-                          <td className={`px-4 py-3 text-[13px] font-mono ${heading}`}>₹{r.ppd}</td>
-                          <td className={`px-4 py-3 text-[13px] font-semibold text-[#059669]`}>₹{r.earningsToday}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
+              <div className="p-4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+                {ZONES.map((zone, i) => {
+                  const seed = tickCount + i;
+                  const demand = 30 + Math.floor(Math.abs(Math.sin(seed * 2.1)) * 50);
+                  const supply = Math.round(demand * (0.5 + Math.abs(Math.sin(seed * 3.7)) * 0.6));
+                  const shortage = Math.max(0, demand - supply);
+                  const pct = Math.min(100, Math.round((supply / demand) * 100));
+                  const intensity = shortage > 10 ? "high" : shortage > 4 ? "mid" : "ok";
+                  const bg = intensity === "high"
+                    ? dark ? "bg-[#FF4D1C]/15 border-[#FF4D1C]/30" : "bg-[#FF4D1C]/08 border-[#FF4D1C]/20"
+                    : intensity === "mid"
+                    ? dark ? "bg-[#F7B731]/12 border-[#F7B731]/30" : "bg-[#F7B731]/08 border-[#F7B731]/20"
+                    : dark ? "bg-[#00C896]/10 border-[#00C896]/20" : "bg-[#00C896]/05 border-[#00C896]/15";
+                  const dotColor = intensity === "high" ? "#FF4D1C" : intensity === "mid" ? "#F7B731" : "#00C896";
 
-        {/* Tab: Riders */}
-        {tab === "riders" && (
-          <div className="gs-fade-in">
-            <div className={`rounded-xl border ${surface} overflow-hidden`}>
-              {riders.length === 0 && !loading ? (
-                <div className="px-4 py-12 text-center">
-                  <Users size={32} className={`mx-auto mb-3 ${sub}`} />
-                  <p className={`text-[14px] font-medium ${heading}`}>No riders registered yet</p>
-                  <p className={`text-[13px] mt-1 ${muted}`}>Riders will appear here after they sign up.</p>
-                </div>
-              ) : (
-                <>
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead>
-                        <tr className={`border-b ${divider}`}>
-                          {["Name", "Email", "Mobile", "Zone", "Vehicle", "Status", "Joined"].map(h => (
-                            <th key={h} className={`text-left text-[11px] font-medium tracking-wider px-4 py-2.5 ${sub}`}>{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {riders.map((r, i) => (
-                          <tr key={r.id ?? i} className={`border-b last:border-0 ${divider} transition-colors ${rowHover}`}>
-                            <td className={`px-4 py-3 text-[13px] font-medium ${heading}`}>{r.name}</td>
-                            <td className={`px-4 py-3 text-[13px] ${muted}`}>{r.email}</td>
-                            <td className={`px-4 py-3 text-[13px] font-mono ${muted}`}>+91 {r.mobile}</td>
-                            <td className={`px-4 py-3 text-[13px] ${heading}`}>{r.zone}</td>
-                            <td className={`px-4 py-3 text-[13px] capitalize ${muted}`}>{r.vehicle_type}</td>
-                            <td className="px-4 py-3">
-                              <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${
-                                r.status === "active" ? "bg-[#F0FDF4] text-[#059669]" : "bg-gray-100 text-gray-500"
-                              }`}>{r.status}</span>
-                            </td>
-                            <td className={`px-4 py-3 text-[12px] ${sub}`}>
-                              {r.created_at ? new Date(r.created_at).toLocaleDateString("en-IN") : "—"}
-                            </td>
-                          </tr>
+                  // Simulated rider dots
+                  const riderCount = Math.min(6, Math.floor(supply / 8));
+
+                  return (
+                    <div key={zone} className={`rounded-xl border p-3 ${bg} transition-all duration-500`}>
+                      <div className={`text-[10px] font-semibold tracking-wide mb-1 ${cls.text}`}>{zone}</div>
+                      <div className="flex gap-0.5 flex-wrap mb-2" style={{ minHeight: 16 }}>
+                        {Array.from({ length: riderCount }).map((_, ri) => (
+                          <div key={ri} className="w-2 h-2 rounded-full" style={{ background: dotColor, opacity: 0.7 + ri * 0.05 }} />
                         ))}
-                      </tbody>
-                    </table>
+                        {supply === 0 && <div className={`text-[9px] ${cls.muted}`}>No riders</div>}
+                      </div>
+                      <div className={`text-[9px] ${cls.muted}`}>{supply}/{demand} · {pct}%</div>
+                      <div className={`mt-1 h-1 rounded-full ${dark ? "bg-[#1E1E2E]" : "bg-gray-100"}`}>
+                        <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, background: dotColor }} />
+                      </div>
+                      {shortage > 0 && (
+                        <div className="text-[9px] mt-1 font-semibold" style={{ color: dotColor }}>-{shortage} needed</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Revenue simulation */}
+            <div className={`rounded-2xl border p-5 ${cls.bg}`}>
+              <div className={`text-[11px] font-medium tracking-widest uppercase mb-4 ${cls.muted}`}>Revenue model snapshot</div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                {[
+                  { label: "Avg platform margin", value: "12%", sub: "per delivery" },
+                  { label: "Avg rider earning", value: "₹48", sub: "per delivery" },
+                  { label: "Orders/day (sim)", value: "1,240", sub: "across 4 platforms" },
+                  { label: "GigShift take", value: "₹71K", sub: "estimated daily" },
+                ].map(item => (
+                  <div key={item.label} className={`rounded-xl p-4 ${cls.surface}`}>
+                    <div className={`text-[10px] uppercase tracking-wider mb-1 ${cls.muted}`}>{item.label}</div>
+                    <div className={`text-[22px] font-bold ${cls.text}`}>{item.value}</div>
+                    <div className={`text-[11px] ${cls.muted}`}>{item.sub}</div>
                   </div>
-                </>
-              )}
+                ))}
+              </div>
             </div>
           </div>
         )}
 
-        {/* Tab: Platforms */}
-        {tab === "platforms" && (
-          <div className="gs-fade-in">
-            <div className={`rounded-xl border ${surface} overflow-hidden`}>
-              {platforms.length === 0 && !loading ? (
-                <div className="px-4 py-12 text-center">
-                  <Building2 size={32} className={`mx-auto mb-3 ${sub}`} />
-                  <p className={`text-[14px] font-medium ${heading}`}>No platforms registered yet</p>
-                  <p className={`text-[13px] mt-1 ${muted}`}>Platforms will appear here after they sign up.</p>
+        {/* Orders Tab */}
+        {tab === "orders" && (
+          <div className={`rounded-2xl border ${cls.bg} overflow-hidden`}>
+            <div className={`px-5 py-3 border-b flex items-center justify-between ${cls.border}`}>
+              <span className={`text-[11px] font-medium tracking-widest uppercase ${cls.muted}`}>All active platform orders</span>
+              <span className={`text-[11px] ${cls.muted}`}>Auto-refresh 4s</span>
+            </div>
+            {orders.length === 0 ? (
+              <div className={`px-5 py-10 text-center ${cls.muted}`}>
+                <CheckCircle size={20} className="mx-auto mb-2 text-[#00C896]" />
+                <div className="text-[13px]">No active orders right now.</div>
+              </div>
+            ) : (
+              <div>
+                {orders.map((order, i) => {
+                  const pct = Math.round((order.confirmed / order.requested) * 100);
+                  const slaColor = order.sla === "green" ? "#00C896" : order.sla === "yellow" ? "#F7B731" : "#FF4D1C";
+                  return (
+                    <div key={order.id}
+                      className={`px-4 sm:px-5 py-3.5 flex flex-wrap sm:flex-nowrap items-center gap-3 sm:gap-5 ${i < orders.length - 1 ? `border-b ${cls.border}` : ""}`}
+                    >
+                      <div className="flex items-center gap-2.5 w-28 shrink-0">
+                        <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white text-[11px] font-bold shrink-0" style={{ background: order.platform.color }}>
+                          {order.platform.name[0]}
+                        </div>
+                        <span className={`text-[13px] font-semibold ${cls.text}`}>{order.platform.name}</span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className={`text-[11px] font-mono ${cls.muted}`}>{order.id}</div>
+                        <div className={`text-[13px] font-medium ${cls.text}`}>{order.zone}</div>
+                      </div>
+                      <div className="w-36">
+                        <div className="flex justify-between text-[11px] mb-1">
+                          <span className={`font-mono ${cls.text}`}>{order.confirmed}/{order.requested}</span>
+                          <span className={cls.muted}>{pct}%</span>
+                        </div>
+                        <div className={`h-1 rounded-full ${dark ? "bg-[#1E1E2E]" : "bg-gray-100"}`}>
+                          <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: slaColor }} />
+                        </div>
+                      </div>
+                      <div className={`text-[11px] font-mono ${cls.muted} hidden sm:block`}>{order.elapsed}s</div>
+                      <div className="text-[13px] font-semibold font-mono text-[#00C896]">₹{order.ppd}</div>
+                      <div className="text-[10px] font-semibold px-2.5 py-1 rounded-full"
+                        style={{ background: slaColor + "20", color: slaColor, border: `1px solid ${slaColor}40` }}>
+                        {order.sla.toUpperCase()}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Dispatch Tab */}
+        {tab === "dispatch" && (
+          <div className={`rounded-2xl border ${cls.bg} overflow-hidden`}>
+            <div className={`px-5 py-3 border-b flex items-center justify-between ${cls.border}`}>
+              <span className={`text-[11px] font-medium tracking-widest uppercase ${cls.muted}`}>Live rider assignments</span>
+              <span className="flex items-center gap-1.5 text-[11px] text-[#00C896]">
+                <span className="relative flex h-1.5 w-1.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#00C896] opacity-75" />
+                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-[#00C896]" />
+                </span>
+                Live
+              </span>
+            </div>
+            <div>
+              {dispatches.map((d, i) => (
+                <div key={d.id}
+                  className={`px-4 sm:px-5 py-3.5 flex flex-wrap sm:flex-nowrap items-center gap-3 ${i < dispatches.length - 1 ? `border-b ${cls.border}` : ""}`}
+                >
+                  <div className="w-28 shrink-0">
+                    <div className={`text-[13px] font-medium ${cls.text}`}>{d.rider}</div>
+                    <div className={`text-[10px] font-mono ${cls.muted}`}>R{1000 + i + tickCount}</div>
+                  </div>
+                  <div className={`text-[11px] ${cls.muted} hidden sm:block`}>→</div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-6 h-6 rounded-md flex items-center justify-center text-white text-[10px] font-bold" style={{ background: d.platform.color }}>
+                      {d.platform.name[0]}
+                    </div>
+                    <span className={`text-[13px] font-medium ${cls.text}`}>{d.platform.name}</span>
+                  </div>
+                  <div className={`flex-1 text-[12px] ${cls.muted}`}>{d.zone}</div>
+                  <div className="text-[13px] font-semibold font-mono text-[#00C896]">₹{d.ppd}/del</div>
+                  {d.nudged && (
+                    <div className="text-[10px] font-semibold px-2 py-0.5 rounded"
+                      style={{ background: "#F7B73115", color: "#F7B731", border: "1px solid #F7B73130" }}>
+                      Incentivized
+                    </div>
+                  )}
+                  <div className={`text-[11px] font-mono ${cls.muted} hidden md:block`}>
+                    {d.ts.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Incentives Tab */}
+        {tab === "incentives" && (
+          <div className="space-y-4">
+            <div className={`rounded-2xl border ${cls.bg} overflow-hidden`}>
+              <div className={`px-5 py-3 border-b text-[11px] font-medium tracking-widest uppercase ${cls.muted} ${cls.border}`}>
+                Active incentive zones
+              </div>
+              {shortageSnaps.length === 0 ? (
+                <div className={`px-5 py-8 text-center ${cls.muted}`}>
+                  <CheckCircle size={18} className="mx-auto mb-2 text-[#00C896]" />
+                  <div className="text-[13px]">All zones balanced. No incentives active.</div>
                 </div>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr className={`border-b ${divider}`}>
-                        {["Company", "Contact", "Email", "Volume", "Zones", "Status", "Joined"].map(h => (
-                          <th key={h} className={`text-left text-[11px] font-medium tracking-wider px-4 py-2.5 ${sub}`}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {platforms.map((p, i) => (
-                        <tr key={p.id ?? i} className={`border-b last:border-0 ${divider} transition-colors ${rowHover}`}>
-                          <td className={`px-4 py-3 text-[13px] font-semibold ${heading}`}>{p.company_name}</td>
-                          <td className={`px-4 py-3 text-[13px] ${heading}`}>{p.contact_name}</td>
-                          <td className={`px-4 py-3 text-[13px] ${muted}`}>{p.email}</td>
-                          <td className={`px-4 py-3 text-[13px] ${muted}`}>{p.expected_volume}</td>
-                          <td className={`px-4 py-3 text-[12px] ${muted}`}>{p.zones?.slice(0, 2).join(", ")}{p.zones?.length > 2 ? ` +${p.zones.length - 2}` : ""}</td>
-                          <td className="px-4 py-3">
-                            <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${
-                              p.status === "active" ? "bg-[#F0FDF4] text-[#059669]" : "bg-gray-100 text-gray-500"
-                            }`}>{p.status}</span>
-                          </td>
-                          <td className={`px-4 py-3 text-[12px] ${sub}`}>
-                            {p.created_at ? new Date(p.created_at).toLocaleDateString("en-IN") : "—"}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                shortageSnaps.map((snap, i) => {
+                  const p = PLATFORMS.find(pl => pl.id === snap.platformId)!;
+                  const nudgePct = Math.min(15, Math.round((snap.shortage / snap.demand) * 30));
+                  const nudge = Math.round(snap.ppd * nudgePct / 100);
+                  return (
+                    <div key={snap.platformId}
+                      className={`px-5 py-4 ${i < shortageSnaps.length - 1 ? `border-b ${cls.border}` : ""}`}
+                    >
+                      <div className="flex flex-wrap items-center gap-4 justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-[12px] font-bold" style={{ background: p.color }}>
+                            {p.name[0]}
+                          </div>
+                          <div>
+                            <div className={`text-[14px] font-semibold ${cls.text}`}>{p.name}</div>
+                            <div className={`text-[12px] ${cls.muted}`}>{snap.shortage} short · {Math.round(snap.fulfillmentRate * 100)}% fill rate</div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-5 text-right">
+                          <div>
+                            <div className={`text-[10px] ${cls.muted}`}>Base</div>
+                            <div className={`text-[16px] font-bold font-mono ${cls.text}`}>₹{snap.ppd}</div>
+                          </div>
+                          <div className={cls.muted}>+</div>
+                          <div>
+                            <div className={`text-[10px] ${cls.muted}`}>Boost</div>
+                            <div className="text-[16px] font-bold font-mono text-[#F7B731]">₹{nudge}</div>
+                          </div>
+                          <div className={cls.muted}>=</div>
+                          <div>
+                            <div className={`text-[10px] ${cls.muted}`}>Rider sees</div>
+                            <div className="text-[20px] font-bold font-mono text-[#00C896]">₹{snap.ppd + nudge}</div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className={`mt-3 h-1 rounded-full ${dark ? "bg-[#1E1E2E]" : "bg-gray-100"}`}>
+                        <div className="h-full rounded-full" style={{ width: `${Math.min(100, nudgePct * 5)}%`, background: "#F7B731" }} />
+                      </div>
+                      <div className={`text-[11px] mt-1 ${cls.muted}`}>{nudgePct}% incentive boost active</div>
+                    </div>
+                  );
+                })
               )}
-            </div>
-          </div>
-        )}
-
-        {/* Tab: Orders */}
-        {tab === "orders" && (
-          <div className="gs-fade-in">
-            <div className={`rounded-xl border ${surface} overflow-hidden`}>
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className={`border-b ${divider}`}>
-                      {["Order ID", "Platform", "Zone", "Riders", "PPD", "Total", "Status", "Time"].map(h => (
-                        <th key={h} className={`text-left text-[11px] font-medium tracking-wider px-4 py-2.5 ${sub}`}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[...liveOrders.map(o => ({
-                      id: o.id, platformName: PLATFORMS.find(p => p.id === o.platformId)?.name ?? o.platformId,
-                      zone: o.zone, requested: o.ridersRequested, confirmed: o.ridersConfirmed,
-                      ppd: o.quotedPPD, total: o.totalCost, status: o.status, time: "Live"
-                    })), ...dbOrders.map(o => ({
-                      id: o.id ?? "—", platformName: o.platform_name, zone: o.zone,
-                      requested: o.riders_requested, confirmed: o.riders_confirmed,
-                      ppd: o.ppd, total: o.total_cost, status: o.status,
-                      time: o.created_at ? new Date(o.created_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : "—"
-                    }))].map((o, i, arr) => {
-                      const statusColor = o.status === "fulfilled" ? "text-[#059669]" : o.status === "at_risk" ? "text-red-500" : "text-amber-500";
-                      return (
-                        <tr key={`${o.id}-${i}`} className={`border-b last:border-0 ${divider} transition-colors ${rowHover}`}>
-                          <td className={`px-4 py-3 text-[12px] font-mono ${heading}`}>{typeof o.id === "string" ? o.id.slice(0, 12) : o.id}</td>
-                          <td className={`px-4 py-3 text-[13px] ${heading}`}>{o.platformName}</td>
-                          <td className={`px-4 py-3 text-[13px] ${muted}`}>{o.zone}</td>
-                          <td className={`px-4 py-3 text-[13px] font-mono ${heading}`}>{o.confirmed}/{o.requested}</td>
-                          <td className={`px-4 py-3 text-[13px] font-mono text-[#059669]`}>₹{o.ppd}</td>
-                          <td className={`px-4 py-3 text-[13px] font-semibold ${heading}`}>₹{o.total}</td>
-                          <td className={`px-4 py-3 text-[12px] font-medium capitalize ${statusColor}`}>
-                            {o.status === "fulfilling" ? "Filling" : o.status === "fulfilled" ? "Done" : "At risk"}
-                          </td>
-                          <td className={`px-4 py-3 text-[12px] ${sub}`}>{o.time}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
             </div>
           </div>
         )}
