@@ -3,429 +3,362 @@
 import { useState, useEffect, useRef } from "react";
 import { ZONES } from "@/lib/data/types";
 import {
-  TIERS, TIME_WINDOWS, computeQuote, generateOrderId,
-  getFulfillmentRatePerTick, timeWindowToNoticeMinutes,
-  type OrderRequest, type PriceQuote,
+  TIERS,
+  TIME_WINDOWS,
+  computeQuote,
+  generateOrderId,
+  getFulfillmentRatePerTick,
+  timeWindowToNoticeMinutes,
+  type OrderRequest,
+  type PriceQuote,
 } from "@/lib/simulation/orders";
-import { ChevronDown, CheckCircle, Clock, AlertTriangle } from "lucide-react";
+import { Minus, Plus, CheckCircle, Loader2 } from "lucide-react";
 
 interface Props {
   dark: boolean;
   name: string;
-  email?: string;
 }
 
-type Step = "request" | "quote" | "fulfilling";
-type HistoryTab = "active" | "history";
+type Step = "request" | "quoting" | "quote" | "confirming" | "fulfilling";
 
-export default function PlatformDashboard({ dark, name, email: _email }: Props) {
+export default function PlatformDashboard({ dark, name }: Props) {
   const [step, setStep] = useState<Step>("request");
-  const [historyTab, setHistoryTab] = useState<HistoryTab>("active");
   const [zone, setZone] = useState(ZONES[0]);
   const [riderCount, setRiderCount] = useState(20);
   const [timeWindow, setTimeWindow] = useState(TIME_WINDOWS[2]);
   const [quote, setQuote] = useState<PriceQuote | null>(null);
   const [activeOrder, setActiveOrder] = useState<OrderRequest | null>(null);
   const [orders, setOrders] = useState<OrderRequest[]>([]);
+  const [toast, setToast] = useState<string | null>(null);
   const fulfillInterval = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const noticeMinutes = timeWindowToNoticeMinutes(timeWindow);
 
-  useEffect(() => {
-    if (step === "quote") setQuote(computeQuote(riderCount, zone, noticeMinutes));
-  }, [riderCount, zone, timeWindow, step, noticeMinutes]);
-
-  function handleGetQuote() {
-    setQuote(computeQuote(riderCount, zone, noticeMinutes));
-    setStep("quote");
+  function showToast(msg: string) {
+    setToast(msg);
+    setTimeout(() => setToast(null), 3000);
   }
 
-  function handleConfirm() {
+  function handleGetQuote() {
+    setStep("quoting");
+    setTimeout(() => {
+      const q = computeQuote(riderCount, zone, noticeMinutes);
+      setQuote(q);
+      setStep("quote");
+    }, 900);
+  }
+
+  function handleConfirmOrder() {
     if (!quote) return;
-    const order: OrderRequest = {
-      id: generateOrderId(), zone, ridersRequested: riderCount,
-      timeWindow, noticeMinutes, placedAt: new Date(),
-      tier: quote.tier.name, quotedPPD: quote.finalPPD,
-      totalQuote: quote.totalCost, status: "fulfilling", ridersConfirmed: 0,
-    };
-    setActiveOrder(order);
-    setStep("fulfilling");
+    setStep("confirming");
+    setTimeout(() => {
+      const order: OrderRequest = {
+        id: generateOrderId(),
+        zone,
+        ridersRequested: riderCount,
+        timeWindow,
+        noticeMinutes,
+        placedAt: new Date(),
+        tier: quote.tier.name,
+        quotedPPD: quote.finalPPD,
+        totalQuote: quote.totalCost,
+        status: "fulfilling",
+        ridersConfirmed: 0,
+      };
+      setActiveOrder(order);
+      setStep("fulfilling");
+      startFulfillment(order, quote);
+      showToast(`Order ${order.id} confirmed — riders dispatching`);
+    }, 600);
+  }
+
+  function startFulfillment(order: OrderRequest, q: PriceQuote) {
     let confirmed = 0;
+    const target = order.ridersRequested;
     fulfillInterval.current = setInterval(() => {
-      const rate = getFulfillmentRatePerTick(quote.tier.name, riderCount);
-      confirmed = Math.min(riderCount, confirmed + rate);
-      setActiveOrder(prev => prev ? { ...prev, ridersConfirmed: confirmed, status: confirmed >= riderCount ? "fulfilled" : "fulfilling" } : prev);
-      if (confirmed >= riderCount) {
+      const rate = getFulfillmentRatePerTick(q.tier.name, target);
+      confirmed = Math.min(target, confirmed + rate);
+      setActiveOrder(prev =>
+        prev ? { ...prev, ridersConfirmed: confirmed, status: confirmed >= target ? "fulfilled" : "fulfilling" } : prev
+      );
+      if (confirmed >= target) {
         clearInterval(fulfillInterval.current!);
-        const done: OrderRequest = { ...order, ridersConfirmed: riderCount, status: "fulfilled" };
+        const done: OrderRequest = { ...order, ridersConfirmed: target, status: "fulfilled" };
         setOrders(prev => [done, ...prev]);
+        showToast(`Order fully fulfilled — ${target} riders confirmed`);
       }
     }, 1800);
   }
 
-  function handleReset() {
-    fulfillInterval.current && clearInterval(fulfillInterval.current);
+  function handleNewOrder() {
+    if (fulfillInterval.current) clearInterval(fulfillInterval.current);
     setActiveOrder(null);
     setQuote(null);
     setStep("request");
   }
 
-  const surface = dark ? "bg-[#111827] border-gray-800" : "bg-white border-gray-200";
-  const muted = dark ? "text-gray-400" : "text-gray-500";
-  const heading = dark ? "text-gray-100" : "text-gray-900";
-  const sub = dark ? "text-gray-500" : "text-gray-400";
-  const divider = dark ? "border-gray-800" : "border-gray-100";
-  const inputClass = `w-full px-3.5 py-2.5 rounded-lg border text-[14px] outline-none transition-colors ${
-    dark
-      ? "bg-[#0C0C0C] border-gray-800 text-gray-100 focus:border-[#059669]"
-      : "bg-white border-gray-200 text-gray-900 focus:border-[#059669]"
-  }`;
-
   const fulfillPct = activeOrder
     ? Math.round((activeOrder.ridersConfirmed / activeOrder.ridersRequested) * 100)
     : 0;
 
-  const tier = TIERS.find(t => t.name === (noticeMinutes < 30 || riderCount > 50 ? "surge" : riderCount > 10 ? "standard" : "basic"))!;
+  const predictedTier = noticeMinutes < 30 || riderCount > 50 ? TIERS[2] : riderCount > 10 ? TIERS[1] : TIERS[0];
+
+  const c = {
+    bg: dark ? "bg-[#0D0D18] border-[#1E1E2E]" : "bg-white border-[#E8E8F0]",
+    text: dark ? "text-[#E8E8F0]" : "text-[#1A1A2E]",
+    muted: dark ? "text-[#555]" : "text-[#999]",
+    input: dark ? "bg-[#13131F] border-[#1E1E2E] text-[#E8E8F0]" : "bg-[#F8F8FF] border-[#E8E8F0] text-[#1A1A2E]",
+    surface: dark ? "bg-[#13131F]" : "bg-[#F8F8FF]",
+    page: dark ? "bg-[#0A0A0F]" : "bg-[#F5F5FA]",
+  };
 
   return (
-    <div className={`min-h-screen ${dark ? "bg-[#0C0C0C]" : "bg-gray-50"}`}>
-      <div className="max-w-3xl mx-auto px-6 py-8">
+    <div className={`min-h-screen ${c.page}`}>
+      {toast && (
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-[#00C896] text-black text-[13px] font-semibold px-5 py-2.5 rounded-full shadow-lg">
+          {toast}
+        </div>
+      )}
 
-        {/* Page header */}
-        <div className="flex items-start justify-between mb-8">
-          <div>
-            <h1 className={`text-[24px] font-semibold tracking-tight mb-1 ${heading}`}>
-              Platform Operations
-            </h1>
-            <p className={`text-[14px] ${muted}`}>{name} · Request and manage rider dispatch</p>
-          </div>
-          {orders.length > 0 && (
-            <div className="flex gap-1">
-              {(["active", "history"] as const).map(t => (
-                <button key={t} onClick={() => setHistoryTab(t)}
-                  className={`px-3 py-1.5 text-[12px] font-medium rounded-lg cursor-pointer transition-colors ${
-                    historyTab === t
-                      ? "bg-gray-900 text-white dark:bg-white dark:text-gray-900"
-                      : `${muted} hover:bg-gray-100 dark:hover:bg-gray-800`
-                  }`}>
-                  {t === "active" ? "New order" : `History (${orders.length})`}
-                </button>
-              ))}
-            </div>
-          )}
+      <div className="max-w-2xl mx-auto px-4 sm:px-6 py-6">
+        {/* Header */}
+        <div className="mb-6">
+          <h2 className={`text-[20px] font-bold ${c.text}`}>Platform Ops</h2>
+          <p className={`text-[13px] mt-0.5 ${c.muted}`}>{name} · Request riders, get pricing, track fulfillment</p>
         </div>
 
-        {/* History view */}
-        {historyTab === "history" && orders.length > 0 && (
-          <div className="gs-fade-in">
-            <div className={`rounded-xl border ${surface} overflow-hidden`}>
-              <div className={`px-4 py-3 border-b ${divider}`}>
-                <span className={`text-[11px] font-medium tracking-widest uppercase ${sub}`}>Order history</span>
-              </div>
-              {orders.map((o, i) => {
-                const t = TIERS.find(t => t.name === o.tier)!;
-                return (
-                  <div key={o.id} className={`px-4 py-4 flex items-center justify-between ${i < orders.length - 1 ? `border-b ${divider}` : ""}`}>
-                    <div className="flex items-center gap-3">
-                      <CheckCircle size={16} className="text-[#059669] shrink-0" />
-                      <div>
-                        <div className={`text-[13px] font-semibold ${heading}`}>{o.id}</div>
-                        <div className={`text-[12px] ${muted}`}>{o.zone} · {o.timeWindow}</div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-6">
-                      <div className="text-right">
-                        <div className={`text-[12px] font-mono ${heading}`}>{o.ridersConfirmed}/{o.ridersRequested} riders</div>
-                        <div className={`text-[11px] ${muted}`}>{t.label} tier</div>
-                      </div>
-                      <div className={`text-[15px] font-semibold text-[#059669]`}>₹{o.totalQuote}</div>
-                    </div>
-                  </div>
-                );
-              })}
+        {/* Tier info strip */}
+        <div className="grid grid-cols-3 gap-2 mb-5">
+          {TIERS.map(t => (
+            <div key={t.name}
+              className={`rounded-xl px-3 py-3 border text-center transition-all ${c.bg} ${predictedTier.name === t.name && step === "request" ? "ring-2" : ""}`}
+              style={{ ringColor: t.color }}
+            >
+              <div className="text-[10px] font-bold mb-1" style={{ color: t.color }}>{t.label}</div>
+              <div className={`text-[18px] font-extrabold ${c.text}`}>₹{t.basePPD}</div>
+              <div className={`text-[10px] mt-0.5 ${c.muted}`}>{t.description}</div>
             </div>
+          ))}
+        </div>
+
+        {/* Past orders — always visible at top if any */}
+        {orders.length > 0 && step !== "fulfilling" && (
+          <div className={`rounded-2xl border mb-5 overflow-hidden ${c.bg}`}>
+            <div className={`px-5 py-3 border-b text-[11px] font-medium tracking-widest uppercase ${c.muted} ${dark ? "border-[#1E1E2E]" : "border-[#E8E8F0]"}`}>
+              Order history ({orders.length})
+            </div>
+            {orders.slice(0, 3).map((o, i) => {
+              const tier = TIERS.find(t => t.name === o.tier)!;
+              return (
+                <div key={o.id} className={`px-5 py-3.5 flex flex-wrap gap-3 items-center justify-between ${i < Math.min(orders.length, 3) - 1 ? `border-b ${dark ? "border-[#1E1E2E]" : "border-[#F0F0F8]"}` : ""}`}>
+                  <div className="flex items-center gap-3">
+                    <div className="text-[10px] font-bold px-2 py-0.5 rounded" style={{ background: tier.color, color: "#000" }}>{tier.label}</div>
+                    <span className={`font-mono text-[12px] ${c.text}`}>{o.id}</span>
+                    <span className={`text-[12px] ${c.muted}`}>{o.zone} · {o.timeWindow}</span>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <span className={`text-[12px] font-mono ${c.text}`}>{o.ridersConfirmed}/{o.ridersRequested} riders</span>
+                    <span className="text-[12px] font-bold text-[#00C896]">₹{o.totalQuote}</span>
+                    <CheckCircle size={14} className="text-[#00C896]" />
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
 
-        {/* Active: Request / Quote / Fulfilling */}
-        {historyTab === "active" && (
-          <div className="space-y-4 gs-fade-in">
+        {/* Request form */}
+        {(step === "request" || step === "quoting") && (
+          <div className={`rounded-2xl border p-5 sm:p-6 ${c.bg}`}>
+            <div className={`text-[11px] font-medium tracking-widest uppercase mb-5 ${c.muted}`}>New rider request</div>
 
-            {/* Tier info bar */}
-            <div className={`rounded-xl border ${surface} overflow-hidden`}>
-              <div className={`px-4 py-3 border-b ${divider}`}>
-                <span className={`text-[11px] font-medium tracking-widest uppercase ${sub}`}>Service tiers</span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
+              <div>
+                <label className={`text-[11px] tracking-wider uppercase block mb-2 ${c.muted}`}>Zone</label>
+                <select value={zone} onChange={e => setZone(e.target.value)}
+                  className={`w-full px-4 py-2.5 rounded-xl text-[13px] outline-none cursor-pointer border ${c.input}`}>
+                  {ZONES.map(z => <option key={z} value={z}>{z}</option>)}
+                </select>
               </div>
-              <div className="grid grid-cols-3 divide-x divide-gray-100 dark:divide-gray-800">
-                {TIERS.map(t => (
-                  <div key={t.name} className={`px-4 py-3 ${tier.name === t.name ? (dark ? "bg-[#059669]/5" : "bg-[#F0FDF4]") : ""}`}>
-                    <div className={`text-[11px] font-semibold mb-0.5`} style={{ color: tier.name === t.name ? "#059669" : undefined }}>
-                      <span className={tier.name === t.name ? "text-[#059669]" : muted}>{t.label}</span>
-                    </div>
-                    <div className={`text-[12px] ${muted}`}>{t.description}</div>
-                    <div className={`text-[15px] font-semibold mt-1 ${tier.name === t.name ? "text-[#059669]" : heading}`}>
-                      ₹{t.basePPD}<span className={`text-[11px] font-normal ${muted}`}>/rider</span>
-                    </div>
-                  </div>
+              <div>
+                <label className={`text-[11px] tracking-wider uppercase block mb-2 ${c.muted}`}>When</label>
+                <select value={timeWindow} onChange={e => setTimeWindow(e.target.value)}
+                  className={`w-full px-4 py-2.5 rounded-xl text-[13px] outline-none cursor-pointer border ${c.input}`}>
+                  {TIME_WINDOWS.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+            </div>
+
+            {/* Stepper — replaces slider */}
+            <div className="mb-5">
+              <label className={`text-[11px] tracking-wider uppercase block mb-3 ${c.muted}`}>Riders needed</label>
+              <div className="flex items-center gap-4">
+                <button
+                  onClick={() => setRiderCount(c => Math.max(1, c - 5))}
+                  className={`w-10 h-10 rounded-xl border flex items-center justify-center cursor-pointer hover:border-[#6C5CE7] transition-colors ${c.bg}`}
+                >
+                  <Minus size={14} />
+                </button>
+                <div className="flex-1 text-center">
+                  <div className={`text-[40px] font-extrabold ${c.text}`}>{riderCount}</div>
+                  <div className={`text-[11px] ${c.muted}`}>riders</div>
+                </div>
+                <button
+                  onClick={() => setRiderCount(c => Math.min(150, c + 5))}
+                  className={`w-10 h-10 rounded-xl border flex items-center justify-center cursor-pointer hover:border-[#6C5CE7] transition-colors ${c.bg}`}
+                >
+                  <Plus size={14} />
+                </button>
+              </div>
+              <div className="flex justify-between mt-3">
+                {[1, 10, 25, 50, 100, 150].map(n => (
+                  <button key={n} onClick={() => setRiderCount(n)}
+                    className={`text-[11px] px-2 py-1 rounded cursor-pointer transition-colors ${riderCount === n ? "text-[#6C5CE7] font-semibold" : c.muted}`}>
+                    {n}
+                  </button>
                 ))}
               </div>
             </div>
 
-            {/* Step: Request form */}
-            {step === "request" && (
-              <div className={`rounded-xl border ${surface}`}>
-                <div className={`px-5 py-4 border-b ${divider}`}>
-                  <span className={`text-[13px] font-semibold ${heading}`}>New rider request</span>
-                </div>
-                <div className="p-5 space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className={`block text-[12px] font-medium mb-1.5 ${muted}`}>Zone</label>
-                      <div className="relative">
-                        <select value={zone} onChange={e => setZone(e.target.value)} className={`${inputClass} appearance-none pr-8 cursor-pointer`}>
-                          {ZONES.map(z => <option key={z} value={z}>{z}</option>)}
-                        </select>
-                        <ChevronDown size={14} className={`absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none ${muted}`} />
-                      </div>
-                    </div>
-                    <div>
-                      <label className={`block text-[12px] font-medium mb-1.5 ${muted}`}>Dispatch time</label>
-                      <div className="relative">
-                        <select value={timeWindow} onChange={e => setTimeWindow(e.target.value)} className={`${inputClass} appearance-none pr-8 cursor-pointer`}>
-                          {TIME_WINDOWS.map(t => <option key={t} value={t}>{t}</option>)}
-                        </select>
-                        <ChevronDown size={14} className={`absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none ${muted}`} />
-                      </div>
-                    </div>
-                  </div>
+            {/* Tier preview */}
+            <div className="rounded-xl px-4 py-3 flex items-center gap-3 mb-5 transition-all"
+              style={{ background: `${predictedTier.color}12`, border: `1px solid ${predictedTier.color}40` }}>
+              <div className="w-2 h-2 rounded-full shrink-0" style={{ background: predictedTier.color }} />
+              <span className="font-semibold text-[13px]" style={{ color: predictedTier.color }}>{predictedTier.label} tier</span>
+              <span className={`text-[12px] ${c.muted}`}>· {predictedTier.description}</span>
+              <span className="ml-auto font-bold font-mono text-[13px]" style={{ color: predictedTier.color }}>₹{predictedTier.basePPD}/rider</span>
+            </div>
 
-                  {/* Rider count — stepper, not slider */}
-                  <div>
-                    <label className={`block text-[12px] font-medium mb-1.5 ${muted}`}>Riders required</label>
-                    <div className="flex items-center gap-3">
-                      <button onClick={() => setRiderCount(c => Math.max(1, c - 5))}
-                        className={`w-9 h-9 rounded-lg border flex items-center justify-center text-lg font-light cursor-pointer transition-colors ${
-                          dark ? "border-gray-700 text-gray-300 hover:bg-gray-800" : "border-gray-200 text-gray-600 hover:bg-gray-50"
-                        }`}>−</button>
-                      <div className="flex-1 relative">
-                        <input
-                          type="number" value={riderCount}
-                          onChange={e => setRiderCount(Math.max(1, Math.min(200, Number(e.target.value))))}
-                          className={`${inputClass} text-center text-[18px] font-semibold`}
-                        />
-                      </div>
-                      <button onClick={() => setRiderCount(c => Math.min(200, c + 5))}
-                        className={`w-9 h-9 rounded-lg border flex items-center justify-center text-lg font-light cursor-pointer transition-colors ${
-                          dark ? "border-gray-700 text-gray-300 hover:bg-gray-800" : "border-gray-200 text-gray-600 hover:bg-gray-50"
-                        }`}>+</button>
-                      <div className="flex gap-1">
-                        {[10, 25, 50, 100].map(n => (
-                          <button key={n} onClick={() => setRiderCount(n)}
-                            className={`px-2.5 py-1.5 rounded text-[11px] font-medium cursor-pointer transition-colors ${
-                              riderCount === n
-                                ? "bg-[#059669] text-white"
-                                : dark ? "bg-gray-800 text-gray-400 hover:bg-gray-700" : "bg-gray-100 text-gray-500 hover:bg-gray-200"
-                            }`}>{n}</button>
-                        ))}
-                      </div>
-                    </div>
-                    <div className={`mt-1.5 text-[11px] ${sub}`}>
-                      Current tier: <span className="font-semibold text-[#059669]">{tier.label}</span> · {tier.description}
-                    </div>
-                  </div>
-
-                  <button onClick={handleGetQuote}
-                    className="w-full py-2.5 rounded-lg bg-[#059669] text-white text-[14px] font-semibold cursor-pointer hover:bg-[#047857] transition-colors">
-                    Get quote
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Step: Quote */}
-            {step === "quote" && quote && (
-              <div className={`rounded-xl border ${surface} gs-fade-in`}>
-                <div className={`px-5 py-4 border-b ${divider} flex items-center justify-between`}>
-                  <span className={`text-[13px] font-semibold ${heading}`}>Price quote</span>
-                  <button onClick={() => setStep("request")} className={`text-[12px] cursor-pointer ${muted} hover:text-gray-700`}>Edit request</button>
-                </div>
-                <div className="p-5">
-                  <div className={`rounded-lg p-4 mb-4 ${dark ? "bg-[#0C0C0C]" : "bg-gray-50"} border ${divider}`}>
-                    <div className="grid grid-cols-3 gap-4 mb-4">
-                      <div>
-                        <div className={`text-[11px] ${sub} mb-1`}>Riders</div>
-                        <div className={`text-[22px] font-bold ${heading}`}>{riderCount}</div>
-                      </div>
-                      <div>
-                        <div className={`text-[11px] ${sub} mb-1`}>Rate per rider</div>
-                        <div className="text-[22px] font-bold text-[#059669]">₹{quote.finalPPD}</div>
-                      </div>
-                      <div>
-                        <div className={`text-[11px] ${sub} mb-1`}>Total</div>
-                        <div className={`text-[22px] font-bold ${heading}`}>₹{quote.totalCost}</div>
-                      </div>
-                    </div>
-
-                    <div className={`border-t pt-3 ${divider}`}>
-                      <div className={`text-[11px] font-medium mb-2 ${sub}`}>Pricing breakdown</div>
-                      <div className="grid grid-cols-4 gap-2 text-[12px]">
-                        <div>
-                          <div className={sub}>Base</div>
-                          <div className={`font-mono font-medium ${heading}`}>₹{quote.basePPD}</div>
-                        </div>
-                        <div>
-                          <div className={sub}>Time</div>
-                          <div className={`font-mono font-medium ${quote.multipliers.hour > 1.2 ? "text-amber-500" : "text-[#059669]"}`}>
-                            ×{quote.multipliers.hour.toFixed(2)}
-                          </div>
-                        </div>
-                        <div>
-                          <div className={sub}>Zone</div>
-                          <div className={`font-mono font-medium ${quote.multipliers.zone > 1.1 ? "text-amber-500" : "text-[#059669]"}`}>
-                            ×{quote.multipliers.zone.toFixed(2)}
-                          </div>
-                        </div>
-                        <div>
-                          <div className={sub}>Notice</div>
-                          <div className={`font-mono font-medium ${quote.multipliers.notice > 1.2 ? "text-red-500" : "text-[#059669]"}`}>
-                            ×{quote.multipliers.notice.toFixed(2)}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <button onClick={() => setStep("request")}
-                      className={`py-2.5 rounded-lg border text-[13px] font-medium cursor-pointer transition-colors ${
-                        dark ? "border-gray-700 text-gray-300 hover:bg-gray-800" : "border-gray-200 text-gray-700 hover:bg-gray-50"
-                      }`}>
-                      Back
-                    </button>
-                    <button onClick={handleConfirm}
-                      className="py-2.5 rounded-lg bg-[#059669] text-white text-[13px] font-semibold cursor-pointer hover:bg-[#047857] transition-colors">
-                      Confirm order
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Step: Fulfilling */}
-            {step === "fulfilling" && activeOrder && (
-              <div className={`rounded-xl border ${surface} gs-fade-in`}>
-                <div className={`px-5 py-4 border-b ${divider} flex items-center justify-between`}>
-                  <div>
-                    <span className={`text-[13px] font-semibold ${heading}`}>{activeOrder.id}</span>
-                    <span className={`text-[12px] ml-3 ${muted}`}>{activeOrder.zone} · {activeOrder.timeWindow}</span>
-                  </div>
-                  <div className={`flex items-center gap-1.5 text-[12px] font-medium ${
-                    activeOrder.status === "fulfilled" ? "text-[#059669]" : "text-amber-500"
-                  }`}>
-                    {activeOrder.status === "fulfilled"
-                      ? <><CheckCircle size={13} /> Fulfilled</>
-                      : <><Clock size={13} /> Dispatching</>
-                    }
-                  </div>
-                </div>
-                <div className="p-5">
-                  {/* Progress */}
-                  <div className="flex items-end justify-between mb-3">
-                    <div>
-                      <span className={`text-[42px] font-bold tracking-tight leading-none ${heading}`}>
-                        {activeOrder.ridersConfirmed}
-                      </span>
-                      <span className={`text-[16px] ${muted} ml-1`}>/ {activeOrder.ridersRequested} riders</span>
-                    </div>
-                    <span className={`text-[14px] font-mono font-medium ${muted}`}>{fulfillPct}%</span>
-                  </div>
-
-                  <div className={`h-1.5 rounded-full mb-4 ${dark ? "bg-gray-800" : "bg-gray-100"}`}>
-                    <div
-                      className="h-full rounded-full transition-all duration-700"
-                      style={{
-                        width: `${fulfillPct}%`,
-                        background: activeOrder.status === "fulfilled" ? "#059669" : "#F59E0B"
-                      }}
-                    />
-                  </div>
-
-                  <div className={`grid grid-cols-3 gap-3 pt-3 border-t ${divider} text-center`}>
-                    <div>
-                      <div className={`text-[11px] ${sub} mb-0.5`}>Rate/rider</div>
-                      <div className={`text-[14px] font-semibold ${heading}`}>₹{activeOrder.quotedPPD}</div>
-                    </div>
-                    <div>
-                      <div className={`text-[11px] ${sub} mb-0.5`}>Total cost</div>
-                      <div className={`text-[14px] font-semibold ${heading}`}>₹{activeOrder.totalQuote}</div>
-                    </div>
-                    <div>
-                      <div className={`text-[11px] ${sub} mb-0.5`}>Tier</div>
-                      <div className={`text-[14px] font-semibold text-[#059669]`}>
-                        {TIERS.find(t => t.name === activeOrder.tier)?.label}
-                      </div>
-                    </div>
-                  </div>
-
-                  {activeOrder.status === "fulfilled" && (
-                    <button onClick={handleReset}
-                      className="w-full mt-4 py-2.5 rounded-lg bg-[#059669] text-white text-[13px] font-semibold cursor-pointer hover:bg-[#047857] transition-colors">
-                      Place another order
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Zone demand table */}
-            <ZoneDemandTable dark={dark} surface={surface} muted={muted} heading={heading} sub={sub} divider={divider} />
+            <button
+              onClick={handleGetQuote}
+              disabled={step === "quoting"}
+              className="w-full py-3 rounded-xl font-semibold text-[14px] cursor-pointer hover:opacity-90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-70"
+              style={{ background: "linear-gradient(135deg, #6C5CE7, #FF4D1C)", color: "#fff" }}
+            >
+              {step === "quoting" ? <><Loader2 size={16} className="animate-spin" /> Getting quote...</> : "Get price quote →"}
+            </button>
           </div>
         )}
-      </div>
-    </div>
-  );
-}
 
-function ZoneDemandTable({ dark, surface, muted, heading, sub, divider }: {
-  dark: boolean; surface: string; muted: string; heading: string; sub: string; divider: string;
-}) {
-  const hour = new Date().getHours();
-  const isPeak = (hour >= 12 && hour <= 14) || (hour >= 19 && hour <= 22);
+        {/* Quote */}
+        {step === "quote" && quote && (
+          <div className={`rounded-2xl border p-5 sm:p-6 ${c.bg}`}>
+            <div className={`text-[11px] font-medium tracking-widest uppercase mb-5 ${c.muted}`}>Price quote</div>
 
-  const data = ZONES.map((z, i) => {
-    const base = 35 + ((i * 17 + hour * 3) % 35);
-    const demand = isPeak ? Math.round(base * 1.4) : base;
-    const supply = Math.round(demand * (0.5 + ((i * 7 + hour) % 50) / 100));
-    const gap = Math.max(0, demand - supply);
-    return { zone: z, demand, supply, gap, pct: Math.round(Math.min(100, (supply / demand) * 100)) };
-  }).sort((a, b) => b.gap - a.gap);
+            <div className="rounded-xl p-5 mb-5"
+              style={{ background: `${quote.tier.color}10`, border: `1px solid ${quote.tier.color}40` }}>
+              <div className="flex items-center gap-3 mb-4 flex-wrap">
+                <div className="px-3 py-1 rounded-full text-[11px] font-bold tracking-wider"
+                  style={{ background: quote.tier.color, color: "#000" }}>
+                  {quote.tier.label.toUpperCase()} TIER
+                </div>
+                <span className={`text-[12px] ${c.muted}`}>{zone} · {timeWindow}</span>
+              </div>
 
-  return (
-    <div className={`rounded-xl border ${surface} overflow-hidden`}>
-      <div className={`px-4 py-3 border-b ${divider} flex items-center justify-between`}>
-        <span className={`text-[11px] font-medium tracking-widest uppercase ${sub}`}>Zone demand</span>
-        {isPeak && (
-          <span className="text-[11px] font-medium text-amber-500 flex items-center gap-1">
-            <AlertTriangle size={11} /> Peak hours active
-          </span>
-        )}
-      </div>
-      <div>
-        {data.map((z, i) => (
-          <div key={z.zone} className={`px-4 py-3 flex items-center gap-4 ${i < data.length - 1 ? `border-b ${divider}` : ""}`}>
-            <div className={`w-32 text-[13px] font-medium shrink-0 ${heading}`}>{z.zone}</div>
-            <div className="flex-1">
-              <div className={`h-1 rounded-full ${dark ? "bg-gray-800" : "bg-gray-100"}`}>
-                <div className="h-full rounded-full transition-all duration-500"
-                  style={{ width: `${z.pct}%`, background: z.pct >= 90 ? "#059669" : z.pct >= 60 ? "#F59E0B" : "#EF4444" }} />
+              <div className="grid grid-cols-3 gap-4 mb-4">
+                {[
+                  { label: "Riders", value: riderCount.toString() },
+                  { label: "Rate/rider", value: `₹${quote.finalPPD}`, color: quote.tier.color },
+                  { label: "Total", value: `₹${quote.totalCost}` },
+                ].map(item => (
+                  <div key={item.label}>
+                    <div className={`text-[10px] uppercase tracking-wider mb-1 ${c.muted}`}>{item.label}</div>
+                    <div className={`text-[26px] font-extrabold ${c.text}`} style={{ color: item.color }}>{item.value}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className={`${dark ? "bg-[#0D0D18]" : "bg-white"} rounded-lg p-3 text-[11px] font-mono`}>
+                <div className={`mb-1.5 ${c.muted}`}>Breakdown</div>
+                <div className="flex gap-4 flex-wrap">
+                  <span className={c.text}>Base ₹{quote.basePPD}</span>
+                  <span style={{ color: quote.multipliers.hour > 1.2 ? "#FF4D1C" : "#00C896" }}>Time ×{quote.multipliers.hour.toFixed(2)}</span>
+                  <span style={{ color: quote.multipliers.zone > 1.1 ? "#F7B731" : "#00C896" }}>Zone ×{quote.multipliers.zone.toFixed(2)}</span>
+                  <span style={{ color: quote.multipliers.notice > 1.2 ? "#FF4D1C" : "#00C896" }}>Notice ×{quote.multipliers.notice.toFixed(2)}</span>
+                </div>
               </div>
             </div>
-            <div className={`text-[12px] font-mono w-16 text-right ${muted}`}>{z.supply}/{z.demand}</div>
-            {z.gap > 0 && (
-              <div className="text-[11px] text-red-500 w-14 text-right font-medium">−{z.gap}</div>
+
+            <div className="flex gap-3">
+              <button onClick={() => setStep("request")}
+                className={`flex-1 py-3 rounded-xl text-[13px] font-semibold border cursor-pointer transition-colors ${dark ? "border-[#1E1E2E] text-[#555] hover:text-[#E8E8F0]" : "border-[#E8E8F0] text-[#999] hover:text-[#1A1A2E]"}`}>
+                Edit
+              </button>
+              <button onClick={handleConfirmOrder}
+                className="flex-1 py-3 rounded-xl font-semibold text-[14px] cursor-pointer hover:opacity-90 active:scale-[0.98] transition-all"
+                style={{ background: quote.tier.color, color: "#000" }}>
+                Confirm order →
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Confirming loading */}
+        {step === "confirming" && (
+          <div className={`rounded-2xl border p-8 text-center ${c.bg}`}>
+            <Loader2 size={28} className="animate-spin mx-auto mb-3 text-[#6C5CE7]" />
+            <div className={`text-[14px] font-medium ${c.text}`}>Dispatching riders...</div>
+            <div className={`text-[12px] mt-1 ${c.muted}`}>Matching your zone and time window</div>
+          </div>
+        )}
+
+        {/* Fulfillment */}
+        {step === "fulfilling" && activeOrder && (
+          <div className={`rounded-2xl border p-5 sm:p-6 ${c.bg}`}>
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <div className={`text-[11px] font-mono ${c.muted}`}>{activeOrder.id}</div>
+                <div className={`text-[15px] font-semibold mt-0.5 ${c.text}`}>{activeOrder.zone} · {activeOrder.timeWindow}</div>
+              </div>
+              <div className={`px-3 py-1 rounded-full text-[11px] font-bold ${
+                activeOrder.status === "fulfilled" ? "bg-[#00C896] text-black" : "bg-[#F7B731] text-black animate-pulse"
+              }`}>
+                {activeOrder.status === "fulfilled" ? "Fulfilled" : "Dispatching"}
+              </div>
+            </div>
+
+            <div className="text-center mb-5">
+              <div className="text-[64px] sm:text-[80px] font-extrabold leading-none transition-all duration-300"
+                style={{ color: activeOrder.status === "fulfilled" ? "#00C896" : "#F7B731" }}>
+                {activeOrder.ridersConfirmed}
+              </div>
+              <div className={`text-[13px] mt-1 ${c.muted}`}>of {activeOrder.ridersRequested} riders confirmed</div>
+            </div>
+
+            <div className={`h-2.5 rounded-full mb-2 ${dark ? "bg-[#1E1E2E]" : "bg-gray-100"}`}>
+              <div className="h-full rounded-full transition-all duration-700"
+                style={{
+                  width: `${fulfillPct}%`,
+                  background: activeOrder.status === "fulfilled" ? "#00C896" : "linear-gradient(90deg, #6C5CE7, #F7B731)",
+                }} />
+            </div>
+            <div className={`flex justify-between text-[11px] mb-5 ${c.muted}`}>
+              <span>{fulfillPct}% filled</span>
+              <span>{activeOrder.status === "fulfilled" ? "Complete" : `${activeOrder.ridersRequested - activeOrder.ridersConfirmed} remaining`}</span>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3 mb-5">
+              {[
+                { label: "Rate/rider", value: `₹${activeOrder.quotedPPD}`, color: "#6C5CE7" },
+                { label: "Total cost", value: `₹${activeOrder.totalQuote}`, color: "#F7B731" },
+                { label: "Tier", value: activeOrder.tier.toUpperCase(), color: TIERS.find(t => t.name === activeOrder.tier)?.color },
+              ].map(m => (
+                <div key={m.label} className={`rounded-xl p-3 ${c.surface}`}>
+                  <div className={`text-[10px] uppercase tracking-wider mb-1 ${c.muted}`}>{m.label}</div>
+                  <div className="text-[18px] font-bold" style={{ color: m.color }}>{m.value}</div>
+                </div>
+              ))}
+            </div>
+
+            {activeOrder.status === "fulfilled" && (
+              <button onClick={handleNewOrder}
+                className="w-full py-3 rounded-xl font-semibold text-[14px] cursor-pointer hover:opacity-90 transition-all"
+                style={{ background: "#00C896", color: "#000" }}>
+                Place another order →
+              </button>
             )}
           </div>
-        ))}
+        )}
       </div>
     </div>
   );
