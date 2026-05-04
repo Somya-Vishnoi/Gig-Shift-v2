@@ -12,12 +12,13 @@ import { ChevronDown, CheckCircle, Clock, AlertTriangle } from "lucide-react";
 interface Props {
   dark: boolean;
   name: string;
+  email?: string;
 }
 
 type Step = "request" | "quote" | "fulfilling";
 type HistoryTab = "active" | "history";
 
-export default function PlatformDashboard({ dark, name }: Props) {
+export default function PlatformDashboard({ dark, name, email: _email }: Props) {
   const [step, setStep] = useState<Step>("request");
   const [historyTab, setHistoryTab] = useState<HistoryTab>("active");
   const [zone, setZone] = useState(ZONES[0]);
