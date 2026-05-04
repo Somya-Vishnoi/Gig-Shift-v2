@@ -2,242 +2,220 @@
 
 import { useState } from "react";
 import type { Role } from "@/lib/data/types";
-import { LANGUAGES, t } from "@/lib/data/types";
+import { PITCH_STATS } from "@/lib/data/types";
 
 interface Props {
-  onAuth: (role: Role, name: string, email: string, mobile: string, language: string) => void;
+  onAuth: (role: Role, name: string, email?: string) => void;
 }
 
 const ADMIN_EMAIL = "admin@gigshift.in";
 
-function validateEmail(e: string) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.trim());
-}
-function validateMobile(m: string) {
-  return /^[6-9]\d{9}$/.test(m.replace(/\s/g, ""));
+// EmailJS — uses service_lm3rjmm
+async function sendWelcomeEmail(name: string, email: string, role: string) {
+  try {
+    await fetch("https://api.emailjs.com/api/v1.0/email/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        service_id: "service_lm3rjmm",
+        template_id: "template_gigshift", // replace with your actual template ID
+        user_id: process.env.NEXT_PUBLIC_EMAILJS_KEY || "YOUR_PUBLIC_KEY",
+        template_params: {
+          to_name: name,
+          to_email: email,
+          role: role,
+          platform: "GigShift",
+        },
+      }),
+    });
+  } catch {
+    // Silent — don't break UX if email fails
+  }
 }
 
 export default function LoginScreen({ onAuth }: Props) {
-  const [lang, setLang] = useState("en");
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [mobile, setMobile] = useState("");
-  const [role, setRole] = useState<"rider" | "platform" | null>(null);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [submitting, setSubmitting] = useState(false);
+  const [selected, setSelected] = useState<"rider" | "platform" | null>(null);
+  const [entering, setEntering] = useState(false);
 
   const isAdmin = email.trim().toLowerCase() === ADMIN_EMAIL;
+  const canEnter = name.trim().length > 1 && (isAdmin || selected !== null);
 
-  function handleSubmit() {
-    const errs: Record<string, string> = {};
-    if (!validateEmail(email)) errs.email = t(lang, "emailError");
-    if (!validateMobile(mobile)) errs.mobile = t(lang, "mobileError");
-    if (!isAdmin && !role) errs.role = t(lang, "roleError");
-    setErrors(errs);
-    if (Object.keys(errs).length > 0) return;
-
-    const finalRole: Role = isAdmin ? "admin" : role!;
-    const name = email.split("@")[0]
-      .replace(/[._\-]/g, " ")
-      .replace(/\b\w/g, c => c.toUpperCase())
-      .trim();
-
-    setSubmitting(true);
-    setTimeout(() => onAuth(finalRole, name, email.trim(), mobile.trim(), lang), 400);
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "Enter") handleSubmit();
+  async function handleEnter() {
+    if (!canEnter) return;
+    setEntering(true);
+    const role: Role = isAdmin ? "admin" : selected!;
+    if (email.includes("@")) {
+      await sendWelcomeEmail(name.trim(), email.trim(), role);
+    }
+    setTimeout(() => onAuth(role, name.trim(), email.trim()), 350);
   }
 
   return (
-    <div className="min-h-screen bg-white flex flex-col" onKeyDown={handleKeyDown}>
-      {/* Top bar */}
-      <div className="flex items-center justify-between px-8 py-5 border-b border-gray-100">
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 bg-[#059669] rounded-lg flex items-center justify-center">
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-              <path d="M8 1L10.5 6H15L11.5 9.5L13 15L8 12L3 15L4.5 9.5L1 6H5.5L8 1Z" fill="white"/>
-            </svg>
-          </div>
-          <span className="text-[15px] font-semibold tracking-tight text-gray-900">GigShift</span>
-        </div>
+    <div className="min-h-screen bg-[#070710] flex flex-col relative overflow-hidden">
+      {/* Background grid */}
+      <div
+        className="absolute inset-0 opacity-[0.035]"
+        style={{
+          backgroundImage:
+            "linear-gradient(#6C5CE7 1px, transparent 1px), linear-gradient(90deg, #6C5CE7 1px, transparent 1px)",
+          backgroundSize: "48px 48px",
+        }}
+      />
+      {/* Glow orbs */}
+      <div className="absolute top-1/3 left-1/4 w-[500px] h-[500px] bg-[#6C5CE7] opacity-[0.05] rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-1/4 right-1/5 w-80 h-80 bg-[#FF4D1C] opacity-[0.04] rounded-full blur-3xl pointer-events-none" />
 
-        {/* Language selector */}
-        <div className="flex items-center gap-1">
-          {LANGUAGES.map(l => (
-            <button
-              key={l.code}
-              onClick={() => setLang(l.code)}
-              className={`px-3 py-1.5 rounded-md text-[12px] cursor-pointer transition-all ${
-                lang === l.code
-                  ? "bg-gray-900 text-white font-medium"
-                  : "text-gray-500 hover:text-gray-900 hover:bg-gray-50"
-              }`}
-            >
-              {l.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <div className="flex flex-col lg:flex-row min-h-screen relative z-10">
 
-      {/* Main content */}
-      <div className="flex-1 flex">
-        {/* Left — form */}
-        <div className="flex-1 flex items-center justify-center px-8 py-16">
-          <div className="w-full max-w-sm">
-            <div className="mb-10">
-              <h1 className="text-[28px] font-semibold text-gray-900 tracking-tight mb-2">
-                {isAdmin ? t(lang, "adminDetected") : "Sign in"}
-              </h1>
-              <p className="text-[14px] text-gray-500">{t(lang, "tagline")}</p>
+        {/* Left — value prop (hidden on mobile, shown on lg) */}
+        <div className="hidden lg:flex flex-col justify-center px-16 py-12 flex-1 max-w-xl">
+          <div className="mb-10">
+            <div className="flex items-center gap-3 mb-8">
+              <div className="w-10 h-10 bg-gradient-to-br from-[#FF4D1C] to-[#6C5CE7] rounded-xl flex items-center justify-center text-xl shadow-lg">
+                ⚡
+              </div>
+              <span className="text-white text-[20px] font-bold tracking-widest uppercase">GigShift</span>
             </div>
+            <h2 className="text-[38px] font-bold text-white leading-tight mb-4">
+              The OS for<br />gig logistics.
+            </h2>
+            <p className="text-[16px] text-[#666] leading-relaxed max-w-sm">
+              Platforms get riders in minutes. Riders earn more per delivery.
+              GigShift optimises the middle — in real time.
+            </p>
+          </div>
 
-            <div className="space-y-4">
+          {/* Live KPIs */}
+          <div className="grid grid-cols-2 gap-4">
+            {[
+              { label: "Active riders", value: PITCH_STATS.totalRiders.toLocaleString() },
+              { label: "SLA rate", value: PITCH_STATS.slaRate },
+              { label: "Dispatched this month", value: PITCH_STATS.dispatchedThisMonth },
+              { label: "Avg fill time", value: PITCH_STATS.avgFillTime },
+            ].map((stat) => (
+              <div key={stat.label} className="bg-[#0D0D18] border border-[#1E1E2E] rounded-xl px-4 py-3">
+                <div className="text-[11px] text-[#444] tracking-widest uppercase mb-1">{stat.label}</div>
+                <div className="text-[22px] font-bold text-white">{stat.value}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Right — login form */}
+        <div className="flex flex-col items-center justify-center flex-1 px-6 py-10 lg:px-12">
+
+          {/* Mobile logo */}
+          <div className="flex flex-col items-center mb-8 lg:hidden">
+            <div className="w-12 h-12 bg-gradient-to-br from-[#FF4D1C] to-[#6C5CE7] rounded-2xl flex items-center justify-center text-2xl mb-3 shadow-lg">
+              ⚡
+            </div>
+            <h1 className="text-[22px] font-bold tracking-widest text-white uppercase">GigShift</h1>
+            <p className="text-[11px] text-[#444] tracking-[0.2em] mt-1">The OS for gig logistics</p>
+          </div>
+
+          <div
+            className={`w-full max-w-sm transition-all duration-300 ${entering ? "opacity-0 scale-95" : "opacity-100 scale-100"}`}
+          >
+            <div className="bg-[#0D0D18] border border-[#1E1E2E] rounded-2xl p-6 shadow-2xl">
+              <div className="mb-1 text-[18px] font-semibold text-white">Sign in</div>
+              <div className="text-[12px] text-[#444] mb-5">No password needed for demo</div>
+
+              {/* Name */}
+              <div className="mb-4">
+                <label className="text-[10px] text-[#444] tracking-[0.15em] uppercase block mb-1.5">
+                  Full name
+                </label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={e => setName(e.target.value)}
+                  placeholder="Ravi Kumar"
+                  onKeyDown={e => e.key === "Enter" && handleEnter()}
+                  className="w-full bg-[#13131F] border border-[#1E1E2E] rounded-lg px-4 py-2.5 text-[14px] text-white placeholder-[#333] outline-none focus:border-[#6C5CE7] transition-colors"
+                />
+              </div>
+
               {/* Email */}
-              <div>
-                <label className="block text-[12px] font-medium text-gray-700 mb-1.5">
-                  {t(lang, "emailLabel")}
+              <div className="mb-5">
+                <label className="text-[10px] text-[#444] tracking-[0.15em] uppercase block mb-1.5">
+                  Email <span className="text-[#333] normal-case">(optional — for welcome email)</span>
                 </label>
                 <input
                   type="email"
                   value={email}
-                  onChange={e => {
-                    setEmail(e.target.value);
-                    setErrors(p => ({ ...p, email: "" }));
-                  }}
-                  placeholder="name@company.com"
-                  className={`w-full px-3.5 py-2.5 rounded-lg border text-[14px] text-gray-900 placeholder-gray-400 outline-none transition-colors bg-white ${
-                    errors.email
-                      ? "border-red-400 focus:border-red-500"
-                      : "border-gray-300 focus:border-[#059669]"
-                  }`}
+                  onChange={e => setEmail(e.target.value)}
+                  placeholder="you@company.com"
+                  onKeyDown={e => e.key === "Enter" && handleEnter()}
+                  className="w-full bg-[#13131F] border border-[#1E1E2E] rounded-lg px-4 py-2.5 text-[14px] text-white placeholder-[#333] outline-none focus:border-[#6C5CE7] transition-colors"
                 />
-                {errors.email && (
-                  <p className="text-red-500 text-[12px] mt-1">{errors.email}</p>
-                )}
-                {isAdmin && !errors.email && (
-                  <p className="text-[#059669] text-[12px] mt-1 font-medium">
-                    Admin access unlocked
-                  </p>
+                {isAdmin && (
+                  <div className="mt-1.5 text-[11px] text-[#F7B731]">Admin access unlocked</div>
                 )}
               </div>
 
-              {/* Mobile */}
-              <div>
-                <label className="block text-[12px] font-medium text-gray-700 mb-1.5">
-                  {t(lang, "mobileLabel")}
-                </label>
-                <div className="flex gap-2">
-                  <div className={`flex items-center px-3 rounded-lg border text-[14px] text-gray-500 bg-gray-50 shrink-0 ${
-                    errors.mobile ? "border-red-400" : "border-gray-300"
-                  }`}>
-                    +91
-                  </div>
-                  <input
-                    type="tel"
-                    value={mobile}
-                    onChange={e => {
-                      setMobile(e.target.value.replace(/\D/g, "").slice(0, 10));
-                      setErrors(p => ({ ...p, mobile: "" }));
-                    }}
-                    placeholder="98765 43210"
-                    className={`flex-1 px-3.5 py-2.5 rounded-lg border text-[14px] text-gray-900 placeholder-gray-400 outline-none transition-colors bg-white ${
-                      errors.mobile
-                        ? "border-red-400 focus:border-red-500"
-                        : "border-gray-300 focus:border-[#059669]"
-                    }`}
-                  />
-                </div>
-                {errors.mobile && (
-                  <p className="text-red-500 text-[12px] mt-1">{errors.mobile}</p>
-                )}
-              </div>
-
-              {/* Role selector — hidden for admin */}
+              {/* Role — hidden for admin */}
               {!isAdmin && (
-                <div>
-                  <label className="block text-[12px] font-medium text-gray-700 mb-1.5">
-                    {t(lang, "roleLabel")}
+                <div className="mb-5">
+                  <label className="text-[10px] text-[#444] tracking-[0.15em] uppercase block mb-2">
+                    I am a
                   </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {(["rider", "platform"] as const).map(r => (
+                  <div className="grid grid-cols-2 gap-3">
+                    {[
+                      { role: "rider" as const, label: "Rider", sub: "Delivery partner", color: "#00C896" },
+                      { role: "platform" as const, label: "Platform", sub: "Ops / Pricing", color: "#6C5CE7" },
+                    ].map(opt => (
                       <button
-                        key={r}
-                        onClick={() => {
-                          setRole(r);
-                          setErrors(p => ({ ...p, role: "" }));
+                        key={opt.role}
+                        onClick={() => setSelected(opt.role)}
+                        className="rounded-xl p-3.5 text-left transition-all duration-150 cursor-pointer active:scale-[0.97] border"
+                        style={{
+                          background: selected === opt.role ? `${opt.color}12` : "#13131F",
+                          borderColor: selected === opt.role ? opt.color : "#1E1E2E",
+                          borderWidth: selected === opt.role ? 2 : 1,
                         }}
-                        className={`py-3 px-4 rounded-lg border text-[13px] font-medium cursor-pointer transition-all text-left ${
-                          role === r
-                            ? "border-[#059669] bg-[#F0FDF4] text-[#059669]"
-                            : "border-gray-200 text-gray-600 hover:border-gray-300 bg-white"
-                        }`}
                       >
-                        <div className="font-semibold mb-0.5">
-                          {r === "rider" ? t(lang, "roleRider") : t(lang, "rolePlatform")}
+                        <div className="text-[13px] font-semibold mb-0.5"
+                          style={{ color: selected === opt.role ? opt.color : "#E8E8F0" }}>
+                          {opt.label}
                         </div>
-                        <div className={`text-[11px] font-normal ${role === r ? "text-[#059669]/70" : "text-gray-400"}`}>
-                          {r === "rider" ? "Delivery partner" : "Ops & dispatch"}
-                        </div>
+                        <div className="text-[11px] text-[#444]">{opt.sub}</div>
                       </button>
                     ))}
                   </div>
-                  {errors.role && (
-                    <p className="text-red-500 text-[12px] mt-1">{errors.role}</p>
-                  )}
                 </div>
               )}
 
-              {/* Admin info panel */}
-              {isAdmin && (
-                <div className="p-3.5 rounded-lg bg-[#F0FDF4] border border-[#BBF7D0]">
-                  <div className="text-[13px] font-semibold text-[#059669] mb-0.5">
-                    GigShift Admin Console
-                  </div>
-                  <div className="text-[12px] text-[#047857]">
-                    Full access — riders, platforms, live dispatch, analytics
-                  </div>
-                </div>
-              )}
-
-              {/* Submit */}
               <button
-                onClick={handleSubmit}
-                disabled={submitting}
-                className="w-full py-2.5 rounded-lg bg-[#059669] text-white text-[14px] font-semibold cursor-pointer hover:bg-[#047857] active:scale-[0.99] transition-all disabled:opacity-60 mt-2"
+                onClick={handleEnter}
+                disabled={!canEnter}
+                className={`w-full py-3 rounded-xl font-semibold text-[14px] transition-all duration-200 ${
+                  canEnter
+                    ? "bg-gradient-to-r from-[#FF4D1C] to-[#6C5CE7] text-white cursor-pointer hover:opacity-90 active:scale-[0.98]"
+                    : "bg-[#13131F] text-[#333] cursor-not-allowed border border-[#1E1E2E]"
+                }`}
               >
-                {submitting ? t(lang, "loading") : t(lang, "continueBtn")}
+                {entering ? "Entering..." : "Enter Dashboard →"}
               </button>
             </div>
 
-            <p className="text-[11px] text-gray-400 text-center mt-6">
-              By continuing, you agree to GigShift's Terms of Service and Privacy Policy
-            </p>
-          </div>
-        </div>
-
-        {/* Right — visual panel (desktop only) */}
-        <div className="hidden lg:flex flex-1 bg-gray-50 border-l border-gray-100 items-center justify-center p-16">
-          <div className="max-w-xs">
-            <div className="space-y-4 mb-10">
+            {/* Mobile KPIs */}
+            <div className="grid grid-cols-2 gap-2 mt-4 lg:hidden">
               {[
-                { label: "Active Riders", value: "2,847", delta: "+12% today" },
-                { label: "Orders Fulfilled", value: "94.2%", delta: "SLA rate" },
-                { label: "Avg. Dispatch Time", value: "4.3 min", delta: "-0.8 from yesterday" },
-              ].map(item => (
-                <div key={item.label} className="flex items-center justify-between py-3 border-b border-gray-200 last:border-0">
-                  <div>
-                    <div className="text-[12px] text-gray-500 mb-0.5">{item.label}</div>
-                    <div className="text-[22px] font-semibold text-gray-900 tracking-tight">{item.value}</div>
-                  </div>
-                  <div className="text-[11px] text-[#059669] font-medium">{item.delta}</div>
+                { label: "Active riders", value: PITCH_STATS.totalRiders.toLocaleString() },
+                { label: "SLA rate", value: PITCH_STATS.slaRate },
+              ].map(stat => (
+                <div key={stat.label} className="bg-[#0D0D18] border border-[#1E1E2E] rounded-xl px-3 py-2.5">
+                  <div className="text-[10px] text-[#444] uppercase tracking-wider mb-0.5">{stat.label}</div>
+                  <div className="text-[18px] font-bold text-white">{stat.value}</div>
                 </div>
               ))}
             </div>
-            <div className="flex items-center gap-2">
-              <div className="w-1.5 h-1.5 rounded-full bg-[#059669] gs-pulse-dot" />
-              <span className="text-[12px] text-gray-400">Live data · Updated every 4s</span>
-            </div>
+
+            <p className="text-center text-[10px] text-[#2a2a2a] mt-4 tracking-wider">
+              DEMO · NO REAL DATA STORED
+            </p>
           </div>
         </div>
       </div>
