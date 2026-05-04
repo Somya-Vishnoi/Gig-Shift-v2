@@ -13,12 +13,12 @@ const ADMIN_EMAIL = "admin@gigshift.in";
 // EmailJS — uses service_lm3rjmm
 async function sendWelcomeEmail(name: string, email: string, role: string) {
   try {
-    await fetch("https://api.emailjs.com/api/v1.0/email/send", {
+    await fetch("yZpmfwswhyWbfcUBE", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         service_id: "service_lm3rjmm",
-        template_id: "template_gigshift", // replace with your actual template ID
+        template_id: "template_0alg46p", // replace with your actual template ID
         user_id: process.env.NEXT_PUBLIC_EMAILJS_KEY || "YOUR_PUBLIC_KEY",
         template_params: {
           to_name: name,
