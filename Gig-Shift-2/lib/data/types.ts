@@ -172,3 +172,14 @@ export const UI_STRINGS: Record<string, Record<string, string>> = {
 export function t(lang: string, key: string): string {
   return UI_STRINGS[lang]?.[key] ?? UI_STRINGS["en"][key] ?? key;
 }
+
+// Pitch-ready KPI constants for demo/presentation
+export const PITCH_STATS = {
+  totalRidersOnboarded: 2847,
+  totalPlatformPartners: 12,
+  avgSLARate: 94.2,
+  avgDispatchMinutes: 4.3,
+  citiesCovered: 3,
+  monthlyOrdersSimulated: 18400,
+  totalRevenueSimulated: 2400000,
+}
