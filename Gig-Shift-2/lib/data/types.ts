@@ -182,4 +182,8 @@ export const PITCH_STATS = {
   citiesCovered: 3,
   monthlyOrdersSimulated: 18400,
   totalRevenueSimulated: 2400000,
+  // aliases used by AdminDashboard
+  totalRiders: 2847,
+  dispatchedThisMonth: "18,400",
+  slaRate: "94.2%",
 }
